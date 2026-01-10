@@ -23,7 +23,7 @@ class NativeLaunchpadImporter {
         // 解析数据库
         let launchpadData = try parseLaunchpadDatabase(at: nativeLaunchpadDB)
 
-        // 转换并保存到 LaunchNext 格式
+        // 转换并保存到 LauncherTurbo 格式
         let result = try convertAndSave(launchpadData: launchpadData)
 
         return result

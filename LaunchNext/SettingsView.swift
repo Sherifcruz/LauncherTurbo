@@ -679,13 +679,13 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         var entries: [BackupEntry] = []
         for url in contents {
             let name = url.lastPathComponent
-            guard name.hasPrefix("LaunchNext_"), name.hasSuffix(".launchnext") else { continue }
+            guard name.hasPrefix("LauncherTurbo_"), name.hasSuffix(".launchnext") else { continue }
             let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
             guard isDirectory else { continue }
             let storeURL = url.appendingPathComponent("Data.store")
             guard fm.fileExists(atPath: storeURL.path) else { continue }
             let rawDate = name
-                .replacingOccurrences(of: "LaunchNext_", with: "")
+                .replacingOccurrences(of: "LauncherTurbo_", with: "")
                 .replacingOccurrences(of: ".launchnext", with: "")
             guard let date = formatter.date(from: rawDate) else { continue }
             let size = dataStoreSize(at: url)
@@ -731,7 +731,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
             dataStorePath = supportURL.appendingPathComponent("Data.store").path
         } else {
             let home = FileManager.default.homeDirectoryForCurrentUser.path
-            dataStorePath = "\(home)/Library/Application Support/LaunchNext/Data.store"
+            dataStorePath = "\(home)/Library/Application Support/LauncherTurbo/Data.store"
         }
         let escapedPath = dataStorePath.replacingOccurrences(of: "\"", with: "\\\"")
         return """
@@ -1675,22 +1675,12 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 
             HStack(spacing: 12) {
                 glassButton(title: appStore.localized(.aboutProjectLink), systemImage: "arrow.up.right.square") {
-                    if let url = URL(string: "https://github.com/RoversX/LaunchNext") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                glassButton(title: appStore.localized(.aboutReportBug), systemImage: "exclamationmark.bubble") {
-                    if let url = URL(string: "https://github.com/RoversX/LaunchNext/issues") {
+                    if let url = URL(string: "https://github.com/Turbo1123/LauncherTurbo") {
                         NSWorkspace.shared.open(url)
                     }
                 }
                 glassButton(title: appStore.localized(.aboutContribute), systemImage: "hands.sparkles") {
-                    if let url = URL(string: "https://github.com/RoversX/LaunchNext") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                glassButton(title: appStore.localized(.aboutBlog), systemImage: "globe") {
-                    if let url = URL(string: "https://blog.closex.org") {
+                    if let url = URL(string: "https://github.com/Turbo1123/LauncherTurbo") {
                         NSWorkspace.shared.open(url)
                     }
                 }
@@ -3145,7 +3135,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     private func supportDirectoryURL() throws -> URL {
         let fm = FileManager.default
         let appSupport = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let dir = appSupport.appendingPathComponent("LaunchNext", isDirectory: true)
+        let dir = appSupport.appendingPathComponent("LauncherTurbo", isDirectory: true)
         if !fm.fileExists(atPath: dir.path) {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -3174,7 +3164,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd'_'HH.mm.ss"
-        let folderName = "LaunchNext_" + formatter.string(from: Date()) + ".launchnext"
+        let folderName = "LauncherTurbo_" + formatter.string(from: Date()) + ".launchnext"
         let destDir = destParent.appendingPathComponent(folderName, isDirectory: true)
         try copyDirectory(from: sourceDir, to: destDir)
         exportPreferences(to: destDir)
@@ -3356,7 +3346,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 
     // MARK: - Preferences export/import
     private var currentPrefsDomain: String {
-        Bundle.main.bundleIdentifier ?? "LaunchNextAppStore"
+        Bundle.main.bundleIdentifier ?? "LauncherTurboAppStore"
     }
 
     private func exportPreferences(to folder: URL) {

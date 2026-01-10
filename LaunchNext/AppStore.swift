@@ -536,7 +536,7 @@ final class AppStore: ObservableObject {
                     try SMAppService.mainApp.unregister()
                 }
             } catch {
-                NSLog("LaunchNext: Failed to update login item setting - %@", error.localizedDescription)
+                NSLog("LauncherTurbo: Failed to update login item setting - %@", error.localizedDescription)
                 isStartOnLogin = oldValue
             }
         }
@@ -770,9 +770,9 @@ final class AppStore: ObservableObject {
         didSet { UserDefaults.standard.set(followScrollPagingEnabled, forKey: Self.followScrollPagingKey) }
     }
 
-    /// 使用 Core Animation 渲染引擎 (120Hz 支持)
+    /// 使用 Core Animation 渲染引擎 (120Hz 支持) - 默认开启
     @Published var useCAGridRenderer: Bool = {
-        if UserDefaults.standard.object(forKey: AppStore.useCAGridRendererKey) == nil { return false }
+        if UserDefaults.standard.object(forKey: AppStore.useCAGridRendererKey) == nil { return true }
         return UserDefaults.standard.bool(forKey: AppStore.useCAGridRendererKey)
     }() {
         didSet { UserDefaults.standard.set(useCAGridRenderer, forKey: Self.useCAGridRendererKey) }
@@ -3050,22 +3050,22 @@ final class AppStore: ObservableObject {
     // MARK: - 持久化：每页独立排序（新）+ 兼容旧版
     func loadAllOrder() {
         guard let modelContext else {
-            print("LaunchNext: ModelContext is nil, cannot load persisted order")
+            print("LauncherTurbo: ModelContext is nil, cannot load persisted order")
             return
         }
         
-        print("LaunchNext: Attempting to load persisted order data...")
+        print("LauncherTurbo: Attempting to load persisted order data...")
         
         // 优先尝试从新的"页-槽位"模型读取
         if loadOrderFromPageEntries(using: modelContext) {
-            print("LaunchNext: Successfully loaded order from PageEntryData")
+            print("LauncherTurbo: Successfully loaded order from PageEntryData")
             return
         }
         
-        print("LaunchNext: PageEntryData not found, trying legacy TopItemData...")
+        print("LauncherTurbo: PageEntryData not found, trying legacy TopItemData...")
         // 回退：旧版全局顺序模型
         loadOrderFromLegacyTopItems(using: modelContext)
-        print("LaunchNext: Finished loading order from legacy data")
+        print("LauncherTurbo: Finished loading order from legacy data")
     }
 
     private func loadOrderFromPageEntries(using modelContext: ModelContext) -> Bool {
@@ -3282,11 +3282,11 @@ final class AppStore: ObservableObject {
         let totalStart = CFAbsoluteTimeGetCurrent()
 
         guard let modelContext else {
-            print("LaunchNext: ModelContext is nil, cannot save order")
+            print("LauncherTurbo: ModelContext is nil, cannot save order")
             return
         }
         guard !items.isEmpty else {
-            print("LaunchNext: Items list is empty, skipping save")
+            print("LauncherTurbo: Items list is empty, skipping save")
             return
         }
 
@@ -3375,7 +3375,7 @@ final class AppStore: ObservableObject {
                 print("⚠️ [Save] Save took longer than one frame (16ms)!")
             }
         } catch {
-            print("LaunchNext: Failed to save order data - \(error.localizedDescription)")
+            print("LauncherTurbo: Failed to save order data - \(error.localizedDescription)")
         }
     }
 
@@ -3789,7 +3789,7 @@ final class AppStore: ObservableObject {
     
     /// 手动刷新（模拟全新启动的完整流程）
     func refresh() {
-        print("LaunchNext: Manual refresh triggered")
+        print("LauncherTurbo: Manual refresh triggered")
         
         // 清除缓存，确保图标与搜索索引重新生成
         cacheManager.clearAllCaches()
@@ -4238,7 +4238,7 @@ final class AppStore: ObservableObject {
             if success {
                 workspace.noteFileSystemChanged(bundlePath)
             } else {
-                NSLog("LaunchNext: Failed to update application bundle icon at %@", bundlePath)
+                NSLog("LauncherTurbo: Failed to update application bundle icon at %@", bundlePath)
             }
         }
     }
@@ -4281,7 +4281,7 @@ final class AppStore: ObservableObject {
     private static func ensureAppSupportDirectory() -> URL {
         let fm = FileManager.default
         if let base = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-            let dir = base.appendingPathComponent("LaunchNext", isDirectory: true)
+            let dir = base.appendingPathComponent("LauncherTurbo", isDirectory: true)
             if !fm.fileExists(atPath: dir.path) {
                 try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             }
@@ -4718,7 +4718,7 @@ final class AppStore: ObservableObject {
     }
 
     private func fetchLatestRelease() async throws -> GitHubRelease {
-        let url = URL(string: "https://api.github.com/repos/RoversX/LaunchNext/releases/latest")!
+        let url = URL(string: "https://api.github.com/repos/Turbo1123/LauncherTurbo/releases/latest")!
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -4762,7 +4762,7 @@ final class AppStore: ObservableObject {
         let baseDirectory = fm.homeDirectoryForCurrentUser
             .appendingPathComponent("Library")
             .appendingPathComponent("Application Support")
-            .appendingPathComponent("LaunchNext")
+            .appendingPathComponent("LauncherTurbo")
             .appendingPathComponent("updates", isDirectory: true)
         let configURL = baseDirectory.appendingPathComponent("config.json", isDirectory: false)
         let supportedLanguages = ["de", "en", "es", "fr", "it", "hi", "ja", "ko", "ru", "vi", "zh"]
@@ -4830,7 +4830,7 @@ final class AppStore: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
 
-        let assetPattern = "LaunchNext.*\\.zip"
+        let assetPattern = "LauncherTurbo.*\\.zip"
         let bundlePath = Bundle.main.bundlePath
 
         var arguments: [String] = ["-na", "Terminal", "--args", updaterURL.path]

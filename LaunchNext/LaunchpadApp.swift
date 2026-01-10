@@ -98,7 +98,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
                                          0,
                                          &hotKeyRef)
         if status != noErr {
-            NSLog("LaunchNext: Failed to register launchpad hotkey (status %d)", status)
+            NSLog("LauncherTurbo: Failed to register launchpad hotkey (status %d)", status)
             hotKeyRef = nil
         }
     }
@@ -113,7 +113,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
     //                                      0,
     //                                      &aiHotKeyRef)
     //     if status != noErr {
-    //         NSLog("LaunchNext: Failed to register AI overlay hotkey (status %d)", status)
+    //         NSLog("LauncherTurbo: Failed to register AI overlay hotkey (status %d)", status)
     //         aiHotKeyRef = nil
     //     }
     // }
@@ -147,7 +147,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let status = InstallEventHandler(GetEventDispatcherTarget(), hotKeyEventCallback, 1, &eventType, UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()), &hotKeyEventHandler)
         if status != noErr {
-            NSLog("LaunchNext: Failed to install hotkey handler (status %d)", status)
+            NSLog("LauncherTurbo: Failed to install hotkey handler (status %d)", status)
         }
     }
 
@@ -185,7 +185,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
         do {
             let fm = FileManager.default
             let appSupport = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            let storeDir = appSupport.appendingPathComponent("LaunchNext", isDirectory: true)
+            let storeDir = appSupport.appendingPathComponent("LauncherTurbo", isDirectory: true)
             if !fm.fileExists(atPath: storeDir.path) {
                 try fm.createDirectory(at: storeDir, withIntermediateDirectories: true)
             }

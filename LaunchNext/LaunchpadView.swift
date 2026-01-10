@@ -8,7 +8,7 @@ import os.signpost
 private final class PerformanceTracker {
     static let shared = PerformanceTracker()
 
-    private let log = OSLog(subsystem: "LaunchNext", category: "Performance")
+    private let log = OSLog(subsystem: "LauncherTurbo", category: "Performance")
     private var lastScrollTime: CFAbsoluteTime = 0
     private var scrollEventCount = 0
     private var frameDropCount = 0
