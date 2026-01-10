@@ -68,7 +68,8 @@ final class CAGridView: NSView, CALayerDelegate {
     var onEmptyAreaClicked: (() -> Void)?
     var onCreateFolder: ((AppInfo, AppInfo, Int) -> Void)?  // (拖拽的app, 目标app, 位置)
     var onMoveToFolder: ((AppInfo, FolderInfo) -> Void)?    // 移动到已有文件夹
-    var onReorderItems: ((Int, Int) -> Void)?               // 重新排序
+    var onReorderItems: ((Int, Int) -> Void)?               // 重新排序 (fromIndex, toIndex)
+    var onRequestNewPage: (() -> Void)?                     // 请求创建新页面
 
     // 拖拽状态
     private var isDraggingItem = false
@@ -80,6 +81,15 @@ final class CAGridView: NSView, CALayerDelegate {
     private var dropTargetIndex: Int?
     private var longPressTimer: Timer?
     private let longPressDuration: TimeInterval = 0.3
+
+    // 跨页拖拽
+    private var edgeDragTimer: Timer?
+    private let edgeDragThreshold: CGFloat = 60  // 边缘检测区域宽度
+    private let edgeDragDelay: TimeInterval = 0.4  // 触发翻页延迟
+
+    // 插入位置指示器
+    private var insertIndicatorLayer: CALayer?
+    private var currentInsertIndex: Int?
 
     // MARK: - Initialization
 
@@ -787,12 +797,173 @@ final class CAGridView: NSView, CALayerDelegate {
                                       width: actualIconSize, height: actualIconSize)
         CATransaction.commit()
 
-        // 检测目标位置
+        // 检测边缘翻页
+        checkEdgeDrag(at: point)
+
+        // 检测目标位置（优先检测是否在某个item上）
         if let (targetItem, targetIndex) = itemAt(point), targetIndex != draggingIndex {
+            // 在另一个item上 - 高亮显示（用于创建文件夹或移入文件夹）
             highlightDropTarget(at: targetIndex)
+            clearInsertIndicator()
         } else {
+            // 不在item上 - 计算插入位置
             clearDropTargetHighlight()
+            if let insertIndex = gridPositionAt(point), insertIndex != draggingIndex {
+                showInsertIndicator(at: insertIndex)
+            } else {
+                clearInsertIndicator()
+            }
         }
+    }
+
+    // MARK: - 边缘翻页检测
+    private func checkEdgeDrag(at point: CGPoint) {
+        let leftEdge = point.x < edgeDragThreshold
+        let rightEdge = point.x > bounds.width - edgeDragThreshold
+
+        if leftEdge && currentPage > 0 {
+            // 左边缘 - 翻到上一页
+            startEdgeDragTimer(direction: -1)
+        } else if rightEdge {
+            // 右边缘 - 翻到下一页（可能创建新页）
+            startEdgeDragTimer(direction: 1)
+        } else {
+            // 离开边缘区域 - 取消计时器
+            cancelEdgeDragTimer()
+        }
+    }
+
+    private func startEdgeDragTimer(direction: Int) {
+        // 如果已有相同方向的计时器，不重复创建
+        if edgeDragTimer != nil { return }
+
+        let timer = Timer(timeInterval: edgeDragDelay, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            let targetPage = self.currentPage + direction
+
+            // 检查是否需要创建新页面
+            if direction > 0 && targetPage >= self.pageCount {
+                // 通知创建新页面
+                self.onRequestNewPage?()
+            }
+
+            self.navigateToPage(targetPage, animated: true)
+            self.edgeDragTimer = nil
+
+            // 翻页后继续检测
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self, self.isDraggingItem else { return }
+                self.checkEdgeDrag(at: self.dragCurrentPoint)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        edgeDragTimer = timer
+    }
+
+    private func cancelEdgeDragTimer() {
+        edgeDragTimer?.invalidate()
+        edgeDragTimer = nil
+    }
+
+    // MARK: - 插入位置指示器
+    private func showInsertIndicator(at index: Int) {
+        if currentInsertIndex == index { return }
+        currentInsertIndex = index
+
+        // 计算指示器位置
+        let pageIndex = index / itemsPerPage
+        let localIndex = index % itemsPerPage
+
+        let pageWidth = bounds.width
+        let pageHeight = bounds.height
+        let horizontalMargin: CGFloat = pageWidth * 0.06
+        let topMargin: CGFloat = pageHeight * 0.02
+        let bottomMargin: CGFloat = pageHeight * 0.10
+        let availableWidth = pageWidth - horizontalMargin * 2
+        let availableHeight = pageHeight - topMargin - bottomMargin
+        let cellWidth = availableWidth / CGFloat(columns)
+        let cellHeight = availableHeight / CGFloat(rows)
+
+        let col = localIndex % columns
+        let row = localIndex / columns
+        let cellCenterX = horizontalMargin + cellWidth * (CGFloat(col) + 0.5)
+        let cellCenterY = topMargin + cellHeight * (CGFloat(row) + 0.5)
+
+        let indicatorX = CGFloat(pageIndex) * pageWidth + cellCenterX - 2 + scrollOffset
+        let indicatorY = pageHeight - cellCenterY - cellHeight * 0.4
+
+        // 创建或更新指示器
+        if insertIndicatorLayer == nil {
+            let layer = CALayer()
+            layer.backgroundColor = NSColor.white.withAlphaComponent(0.8).cgColor
+            layer.cornerRadius = 2
+            layer.shadowColor = NSColor.black.cgColor
+            layer.shadowOffset = CGSize(width: 0, height: 1)
+            layer.shadowRadius = 4
+            layer.shadowOpacity = 0.3
+            layer.zPosition = 500
+            containerLayer.addSublayer(layer)
+            insertIndicatorLayer = layer
+        }
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.15)
+        insertIndicatorLayer?.frame = CGRect(x: indicatorX, y: indicatorY, width: 4, height: cellHeight * 0.8)
+        insertIndicatorLayer?.opacity = 1.0
+        CATransaction.commit()
+    }
+
+    private func clearInsertIndicator() {
+        guard currentInsertIndex != nil else { return }
+        currentInsertIndex = nil
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.1)
+        insertIndicatorLayer?.opacity = 0
+        CATransaction.commit()
+    }
+
+    /// 计算点击位置对应的网格位置（即使是空白区域）
+    private func gridPositionAt(_ point: CGPoint) -> Int? {
+        let pageWidth = bounds.width
+        let pageHeight = bounds.height
+        let adjustedX = point.x - scrollOffset
+
+        // 计算点击的页面
+        let pageIndex = Int(floor(adjustedX / pageWidth))
+        guard pageIndex >= 0 else { return nil }
+        // 允许拖拽到最后一页之后（会创建新页）
+        let effectivePageIndex = min(pageIndex, max(0, pageCount - 1))
+
+        // 使用和 updateLayout 相同的布局计算
+        let horizontalMargin: CGFloat = pageWidth * 0.06
+        let topMargin: CGFloat = pageHeight * 0.02
+        let bottomMargin: CGFloat = pageHeight * 0.10
+
+        let availableWidth = pageWidth - horizontalMargin * 2
+        let availableHeight = pageHeight - topMargin - bottomMargin
+
+        let cellWidth = availableWidth / CGFloat(columns)
+        let cellHeight = availableHeight / CGFloat(rows)
+
+        // 计算点击位置相对于当前页的坐标
+        let localX = adjustedX - CGFloat(effectivePageIndex) * pageWidth - horizontalMargin
+        let localY = pageHeight - point.y - topMargin
+
+        // 钳制到有效范围
+        let clampedX = max(0, min(localX, availableWidth - 1))
+        let clampedY = max(0, min(localY, availableHeight - 1))
+
+        let col = Int(clampedX / cellWidth)
+        let row = Int(clampedY / cellHeight)
+
+        let clampedCol = max(0, min(col, columns - 1))
+        let clampedRow = max(0, min(row, rows - 1))
+
+        let localIndex = clampedRow * columns + clampedCol
+        let globalIndex = effectivePageIndex * itemsPerPage + localIndex
+
+        return globalIndex
     }
 
     private func highlightDropTarget(at index: Int) {
@@ -831,11 +1002,23 @@ final class CAGridView: NSView, CALayerDelegate {
             return
         }
 
-        // 清除高亮
-        clearDropTargetHighlight()
+        // 保存当前插入位置（在清除之前）
+        let savedInsertIndex = currentInsertIndex
 
-        // 检查目标
+        // 清除高亮和指示器
+        clearDropTargetHighlight()
+        clearInsertIndicator()
+        cancelEdgeDragTimer()
+
+        print("🎯 [CAGrid] endDragging at point: \(point), dragIndex: \(dragIndex), savedInsertIndex: \(String(describing: savedInsertIndex))")
+
+        // 计算目标位置
+        let targetPosition = gridPositionAt(point)
+        print("🎯 [CAGrid] targetPosition: \(String(describing: targetPosition)), currentInsertIndex: \(String(describing: currentInsertIndex))")
+
+        // 检查是否拖到另一个item上
         if let (targetItem, targetIndex) = itemAt(point), targetIndex != dragIndex {
+            print("🎯 [CAGrid] Dropped on item: \(targetItem.name) at index \(targetIndex)")
             // 拖拽到另一个 item 上
             if case .app(let dragApp) = dragItem {
                 switch targetItem {
@@ -843,14 +1026,31 @@ final class CAGridView: NSView, CALayerDelegate {
                     // 两个应用 -> 创建文件夹
                     print("📁 [CAGrid] Creating folder: \(dragApp.name) + \(targetApp.name)")
                     onCreateFolder?(dragApp, targetApp, targetIndex)
+                    cancelDragging()
+                    return
                 case .folder(let folder):
                     // 拖到文件夹 -> 移入文件夹
                     print("📂 [CAGrid] Moving to folder: \(dragApp.name) -> \(folder.name)")
                     onMoveToFolder?(dragApp, folder)
-                default:
-                    break
+                    cancelDragging()
+                    return
+                case .empty, .missingApp:
+                    // 空白格子或丢失的应用 -> 当作重排序处理
+                    print("🔄 [CAGrid] Dropped on empty/missing, reordering: \(dragIndex) -> \(targetIndex)")
+                    onReorderItems?(dragIndex, targetIndex)
+                    cancelDragging()
+                    return
                 }
             }
+        }
+
+        // 拖拽到空白区域（不在任何item的图标区域内）-> 重新排序
+        // 优先使用保存的插入位置，其次使用计算的目标位置
+        if let insertIndex = savedInsertIndex ?? targetPosition, insertIndex != dragIndex {
+            print("🔄 [CAGrid] Reordering to empty area: \(dragIndex) -> \(insertIndex)")
+            onReorderItems?(dragIndex, insertIndex)
+        } else {
+            print("⚠️ [CAGrid] No valid drop target, canceling")
         }
 
         cancelDragging()
@@ -1026,6 +1226,27 @@ struct CAGridViewRepresentable: NSViewRepresentable {
         view.onMoveToFolder = { app, folder in
             DispatchQueue.main.async {
                 appStore.addAppToFolder(app, folder: folder)
+            }
+        }
+
+        // 拖拽重新排序
+        view.onReorderItems = { fromIndex, toIndex in
+            DispatchQueue.main.async {
+                guard fromIndex < appStore.items.count else { return }
+                let item = appStore.items[fromIndex]
+                appStore.moveItemAcrossPagesWithCascade(item: item, to: toIndex)
+            }
+        }
+
+        // 请求创建新页面（拖拽到右边缘时）
+        view.onRequestNewPage = {
+            DispatchQueue.main.async {
+                let itemsPerPage = appStore.gridColumnsPerPage * appStore.gridRowsPerPage
+                let currentPageCount = (appStore.items.count + itemsPerPage - 1) / itemsPerPage
+                let neededItems = (currentPageCount + 1) * itemsPerPage - appStore.items.count
+                for _ in 0..<neededItems {
+                    appStore.items.append(.empty(UUID().uuidString))
+                }
             }
         }
 
