@@ -24,6 +24,8 @@ struct FolderView: View {
     @State private var outOfBoundsBeganAt: Date? = nil
     @State private var hasHandedOffDrag: Bool = false
     private let outOfBoundsDwell: TimeInterval = 0.0
+    // 文件夹打开动画状态
+    @State private var appsAppeared: Bool = false
     
     let onClose: () -> Void
     let onLaunchApp: (AppInfo) -> Void
@@ -81,6 +83,12 @@ struct FolderView: View {
                 appStore.openFolderActivatedByKeyboard = false
             } else {
                 isKeyboardNavigationActive = false
+            }
+            // 触发文件夹内应用的交错动画
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                withAnimation(LNAnimations.folderOpenClose) {
+                    appsAppeared = true
+                }
             }
         }
         .onChange(of: isTextFieldFocused) { focused in
@@ -204,6 +212,10 @@ struct FolderView: View {
                             labelWidth: labelWidth,
                             isSelected: isKeyboardNavigationActive && selectedIndex == idx
                         )
+                        // 文件夹打开时的交错动画效果
+                        .scaleEffect(appsAppeared ? 1.0 : 0.7)
+                        .opacity(appsAppeared ? 1.0 : 0.0)
+                        .animation(LNAnimations.folderItemStagger(index: idx), value: appsAppeared)
                     }
                 }
                 .animation(LNAnimations.gridUpdate, value: pendingDropIndex)
@@ -354,7 +366,7 @@ extension FolderView {
                                 // 清理内部拖拽状态并关闭文件夹
                                 draggingApp = nil
                                 outOfBoundsBeganAt = nil
-                                withAnimation(LNAnimations.springFast) {
+                                withAnimation(LNAnimations.folderOpenClose) {
                                     onClose()
                                 }
                                 return

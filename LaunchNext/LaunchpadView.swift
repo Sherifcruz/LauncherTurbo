@@ -523,7 +523,9 @@ struct LaunchpadView: View {
                                 onOpenFolder: { folder in
                                     // 设置 iconSize 以便 FolderView 使用
                                     currentIconSize = caIconSize
-                                    appStore.openFolder = folder
+                                    withAnimation(LNAnimations.folderOpenClose) {
+                                        appStore.openFolder = folder
+                                    }
                                 }
                             )
                             // 强制在刷新触发器变化时重新渲染
@@ -678,7 +680,10 @@ struct LaunchpadView: View {
                         ForEach(0..<pages.count, id: \.self) { index in
                             Circle()
                                 .fill(appStore.currentPage == index ? Color.gray : Color.gray.opacity(0.3))
-                                .frame(width: 8, height: 8)
+                                .frame(width: appStore.currentPage == index ? 8 : 7,
+                                       height: appStore.currentPage == index ? 8 : 7)
+                                .scaleEffect(appStore.currentPage == index ? 1.0 : 0.85)
+                                .animation(LNAnimations.pageTransition, value: appStore.currentPage)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     navigateToPage(index)
@@ -699,6 +704,10 @@ struct LaunchpadView: View {
 
             }
             .padding(.horizontal, actualHorizontalPadding)
+            // 文件夹打开时的背景缩放和模糊效果
+            .scaleEffect(isFolderOpen ? LNAnimations.folderBackgroundScale : 1.0)
+            .blur(radius: isFolderOpen ? LNAnimations.folderBackgroundBlur : 0)
+            .animation(LNAnimations.folderBackgroundEffect, value: isFolderOpen)
         }
         .padding()
         .launchpadBackgroundStyle(appStore.launchpadBackgroundStyle,
@@ -729,13 +738,13 @@ struct LaunchpadView: View {
                 // 半透明背景：仅在文件夹打开时插入，使用淡入淡出过渡
                 if isFolderOpen {
                     Color.black
-                        .opacity(0.1)
+                        .opacity(0.15)
                         .ignoresSafeArea()
-                        .transition(.opacity)
+                        .transition(.opacity.animation(LNAnimations.folderBackgroundEffect))
                         .onTapGesture {
                             if !appStore.isFolderNameEditing {
                                 let closingFolder = appStore.openFolder
-                                withAnimation(LNAnimations.springFast) { appStore.openFolder = nil }
+                                withAnimation(LNAnimations.folderOpenClose) { appStore.openFolder = nil }
                                 if let folder = closingFolder,
                                    let idx = filteredItems.firstIndex(of: .folder(folder)) {
                                     isKeyboardNavigationActive = true
@@ -794,7 +803,7 @@ struct LaunchpadView: View {
                             preferredIconSize: currentIconSize * CGFloat(min(max(appStore.iconScale, 0.6), 1.15)),
                             onClose: {
                                 let closingFolder = appStore.openFolder
-                                withAnimation(LNAnimations.springFast) {
+                                withAnimation(LNAnimations.folderOpenClose) {
                                     appStore.openFolder = nil
                                 }
                                 // 关闭后将键盘导航选中项切换到该文件夹
@@ -1024,7 +1033,7 @@ struct LaunchpadView: View {
         case .app(let app):
             launchApp(app)
         case .folder(let folder):
-            withAnimation(LNAnimations.springFast) {
+            withAnimation(LNAnimations.folderOpenClose) {
                 appStore.openFolder = folder
             }
         case .missingApp:
@@ -1175,11 +1184,11 @@ struct LaunchpadView: View {
         if animated {
             // 标记页面切换中，阻止保存操作
             appStore.isPageTransitioning = true
-            withAnimation(LNAnimations.springFast) {
+            withAnimation(LNAnimations.pageTransition) {
                 appStore.currentPage = targetPage
             }
-            // 动画结束后解除标记（springFast 大约 0.35s）
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak appStore] in
+            // 动画结束后解除标记（pageTransition 大约 0.4s）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak appStore] in
                 appStore?.isPageTransitioning = false
             }
         } else {
@@ -1473,7 +1482,7 @@ extension LaunchpadView {
         if isFolderOpen {
             if event.keyCode == 53 { // esc
                 let closingFolder = appStore.openFolder
-                withAnimation(LNAnimations.springFast) {
+                withAnimation(LNAnimations.folderOpenClose) {
                     appStore.openFolder = nil
                 }
                 if let folder = closingFolder,
@@ -2402,6 +2411,14 @@ struct DragPreviewItem: View {
     let labelWidth: CGFloat
     var scale: CGFloat = 1.2
 
+    // 拖拽时的阴影效果
+    private var dragShadowRadius: CGFloat {
+        scale > 1.0 ? 12 : 4
+    }
+    private var dragShadowOpacity: Double {
+        scale > 1.0 ? 0.25 : 0.1
+    }
+
     // 性能优化：使用计算属性避免状态修改
     private var displayIcon: NSImage {
         switch item {
@@ -2471,7 +2488,8 @@ struct DragPreviewItem: View {
                     .padding(.vertical, 4)
             }
             .scaleEffect(scale)
-            .animation(LNAnimations.springFast, value: scale)
+            .shadow(color: .black.opacity(dragShadowOpacity), radius: dragShadowRadius, x: 0, y: 4)
+            .animation(LNAnimations.dragPreview, value: scale)
 
         case .missingApp(let placeholder):
             VStack(spacing: 6) {
@@ -2503,7 +2521,8 @@ struct DragPreviewItem: View {
                     .padding(.vertical, 4)
             }
             .scaleEffect(scale)
-            .animation(LNAnimations.springFast, value: scale)
+            .shadow(color: .black.opacity(dragShadowOpacity), radius: dragShadowRadius, x: 0, y: 4)
+            .animation(LNAnimations.dragPreview, value: scale)
 
         case .folder(let folder):
             VStack(spacing: 6) {
@@ -2534,8 +2553,9 @@ struct DragPreviewItem: View {
                     .padding(.vertical, 4)
             }
             .scaleEffect(scale)
-            .animation(LNAnimations.springFast, value: scale)
-            
+            .shadow(color: .black.opacity(dragShadowOpacity), radius: dragShadowRadius, x: 0, y: 4)
+            .animation(LNAnimations.dragPreview, value: scale)
+
         case .empty:
             EmptyView()
         }

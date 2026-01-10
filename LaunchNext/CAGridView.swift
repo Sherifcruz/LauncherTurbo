@@ -91,20 +91,40 @@ final class CAGridView: NSView, CALayerDelegate {
     private var insertIndicatorLayer: CALayer?
     private var currentInsertIndex: Int?
 
+    // 鼠标拖拽翻页
+    private var isPageDragging = false
+    private var pageDragStartX: CGFloat = 0
+    private var pageDragStartOffset: CGFloat = 0
+
+    // 事件监听器
+    private var scrollEventMonitor: Any?
+    private var wasWindowVisible = false  // 跟踪窗口可见状态
+
+    // 实例追踪
+    private static var instanceCounter = 0
+    private let instanceId: Int
+
     // MARK: - Initialization
 
     override init(frame frameRect: NSRect) {
+        CAGridView.instanceCounter += 1
+        self.instanceId = CAGridView.instanceCounter
         super.init(frame: frameRect)
         setup()
     }
 
     required init?(coder: NSCoder) {
+        CAGridView.instanceCounter += 1
+        self.instanceId = CAGridView.instanceCounter
         super.init(coder: coder)
         setup()
     }
 
     deinit {
+        print("💀 [CAGrid #\(instanceId)] deinit - instance being destroyed!")
         displayLink?.invalidate()
+        removeScrollEventMonitor()
+        NotificationCenter.default.removeObserver(self)
     }
 
     private func setup() {
@@ -127,13 +147,174 @@ final class CAGridView: NSView, CALayerDelegate {
         CATransaction.setDisableActions(true)
         CATransaction.commit()
 
-        print("✅ [CAGrid] Core Animation grid initialized")
+        // 在初始化时就注册 launchpad 窗口通知（确保始终能接收）
+        NotificationCenter.default.addObserver(self, selector: #selector(launchpadWindowDidShow(_:)), name: .launchpadWindowShown, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(launchpadWindowDidHide(_:)), name: .launchpadWindowHidden, object: nil)
+        // 监听应用激活事件（作为备用方案）
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive(_:)), name: NSApplication.didBecomeActiveNotification, object: nil)
+
+        print("✅ [CAGrid #\(instanceId)] Core Animation grid initialized")
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil {
+        if let window = window {
             setupDisplayLink()
+            // 始终安装滚轮事件监听器（更可靠）
+            setupScrollEventMonitor()
+            // 确保视图成为第一响应者
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                window.makeFirstResponder(self)
+            }
+            print("✅ [CAGrid #\(instanceId)] View moved to window, scroll monitor installed")
+
+            // 监听窗口显示/隐藏事件
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeMainNotification, object: nil)
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+
+            NotificationCenter.default.addObserver(self, selector: #selector(windowDidActivate(_:)), name: NSWindow.didBecomeKeyNotification, object: window)
+            NotificationCenter.default.addObserver(self, selector: #selector(windowDidActivate(_:)), name: NSWindow.didBecomeMainNotification, object: window)
+            NotificationCenter.default.addObserver(self, selector: #selector(windowOcclusionChanged(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: window)
+            // launchpad 窗口通知在 setup() 中注册，这里不需要重复注册
+        } else {
+            // 视图从窗口移除时清理窗口相关的事件监听器
+            // 注意：launchpad 窗口通知不在这里移除，因为它们在 setup() 中注册
+            removeScrollEventMonitor()
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeMainNotification, object: nil)
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        }
+    }
+
+    @objc private func windowDidActivate(_ notification: Notification) {
+        print("🪟 [CAGrid] Window activated, making first responder")
+        window?.makeFirstResponder(self)
+    }
+
+    @objc private func windowOcclusionChanged(_ notification: Notification) {
+        guard let window = window else { return }
+        if window.occlusionState.contains(.visible) {
+            print("🪟 [CAGrid] Window became visible, making first responder")
+            window.makeFirstResponder(self)
+        }
+    }
+
+    @objc private func launchpadWindowDidShow(_ notification: Notification) {
+        // 只有有窗口的实例才响应
+        guard let window = window else {
+            print("⚠️ [CAGrid #\(instanceId)] Launchpad window shown - but no window, ignoring")
+            return
+        }
+        print("🚀 [CAGrid #\(instanceId)] Launchpad window shown, hasMonitor=\(scrollEventMonitor != nil)")
+
+        // 立即安装滚轮事件监听器（如果没有）
+        if scrollEventMonitor == nil {
+            print("🔄 [CAGrid #\(instanceId)] Reinstalling scroll monitor on window show")
+            setupScrollEventMonitor()
+        }
+
+        // 确保成为第一响应者
+        window.makeFirstResponder(self)
+
+        // 延迟再次确认（防止其他组件抢占）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self = self, let win = self.window else { return }
+            print("🔄 [CAGrid #\(self.instanceId)] Delayed check, isFirstResponder=\(win.firstResponder === self), hasMonitor=\(self.scrollEventMonitor != nil)")
+            if win.firstResponder !== self {
+                win.makeFirstResponder(self)
+            }
+            // 确保滚轮监听器存在
+            if self.scrollEventMonitor == nil {
+                self.setupScrollEventMonitor()
+            }
+        }
+    }
+
+    @objc private func launchpadWindowDidHide(_ notification: Notification) {
+        // 只有有窗口的实例才响应
+        guard window != nil else {
+            print("⚠️ [CAGrid #\(instanceId)] Window hidden - but no window, ignoring")
+            return
+        }
+        print("🚀 [CAGrid #\(instanceId)] Window hidden, hasMonitor=\(scrollEventMonitor != nil)")
+        // 不再移除监听器 - 让它保持活跃，这样窗口重新显示时就能立即使用
+        // removeScrollEventMonitor()
+        wasWindowVisible = false
+    }
+
+    @objc private func appDidBecomeActive(_ notification: Notification) {
+        // 应用激活时检查是否需要安装滚轮监听器
+        print("🔔 [CAGrid #\(instanceId)] App became active notification received, window=\(window != nil), isVisible=\(window?.isVisible ?? false)")
+        guard let window = window else {
+            print("🔔 [CAGrid #\(instanceId)] App became active - no window")
+            return
+        }
+
+        // 立即尝试重新安装滚轮监听器（不管窗口是否可见）
+        // 因为窗口可能正在动画中，isVisible 可能还是 false
+        print("🔔 [CAGrid #\(instanceId)] Reinstalling scroll monitor immediately on app activate")
+        setupScrollEventMonitor()
+        window.makeFirstResponder(self)
+
+        // 延迟再次检查，确保滚轮监听器存在
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self = self, let win = self.window else { return }
+            print("🔔 [CAGrid #\(self.instanceId)] Delayed check: isVisible=\(win.isVisible), scrollMonitor=\(self.scrollEventMonitor != nil)")
+            if self.scrollEventMonitor == nil {
+                print("🔄 [CAGrid #\(self.instanceId)] App became active (delayed), reinstalling scroll monitor")
+                self.setupScrollEventMonitor()
+            }
+            win.makeFirstResponder(self)
+        }
+    }
+
+    private func setupScrollEventMonitor() {
+        // 移除旧的监听器
+        removeScrollEventMonitor()
+
+        // 确保有窗口才设置监听器（可见性在事件处理时动态检查）
+        guard window != nil else {
+            print("⚠️ [CAGrid #\(instanceId)] setupScrollEventMonitor: no window, skipping")
+            return
+        }
+
+        // 记录安装时的实例ID用于调试
+        let myInstanceId = self.instanceId
+
+        // 添加本地事件监听器 - 模仿原 LaunchpadView 的 ScrollEventCatcherView
+        // 关键：不进行严格的窗口检查，让事件能够传递
+        scrollEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self = self else {
+                return event
+            }
+
+            // 简单检查：只要有窗口就处理
+            guard self.window != nil else {
+                return event
+            }
+
+            // 不消费事件，让 scrollWheel(with:) 方法也能收到
+            // 但我们在这里也处理一下，作为备份
+            let isPrecise = event.hasPreciseScrollingDeltas
+            print("🎡 [Monitor #\(myInstanceId)] scroll event, precise=\(isPrecise), deltaY=\(event.scrollingDeltaY)")
+
+            // 处理滚轮事件
+            self.handleScrollWheel(with: event)
+
+            // 返回 event 而不是 nil - 让事件继续传递
+            // 这样 scrollWheel(with:) 也能收到事件
+            return event
+        }
+        print("✅ [CAGrid #\(instanceId)] Scroll event monitor installed")
+    }
+
+    private func removeScrollEventMonitor() {
+        if let monitor = scrollEventMonitor {
+            print("🗑️ [CAGrid #\(instanceId)] Removing scroll event monitor")
+            NSEvent.removeMonitor(monitor)
+            scrollEventMonitor = nil
         }
     }
 
@@ -522,6 +703,20 @@ final class CAGridView: NSView, CALayerDelegate {
         print("📐 [CAGrid] Layout: \(columns)x\(rows), iconSize=\(actualIconSize), cell=\(cellWidth)x\(cellHeight)")
     }
 
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        // 确保视图是第一响应者和滚轮监听器已安装
+        if let win = window {
+            if win.firstResponder !== self {
+                win.makeFirstResponder(self)
+            }
+            // 确保滚轮监听器存在
+            if scrollEventMonitor == nil {
+                setupScrollEventMonitor()
+            }
+        }
+    }
+
     override func layout() {
         super.layout()
 
@@ -549,7 +744,34 @@ final class CAGridView: NSView, CALayerDelegate {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func becomeFirstResponder() -> Bool {
+        print("🎯 [CAGrid] becomeFirstResponder")
+        return true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        print("🎯 [CAGrid] resignFirstResponder")
+        return true
+    }
+
+    // 确保视图接受第一次鼠标点击就能响应
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
+    }
+
+    // 确保视图可以接收鼠标事件
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let result = frame.contains(point) ? self : nil
+        return result
+    }
+
     override func scrollWheel(with event: NSEvent) {
+        // 直接处理滚轮事件 - 这是最可靠的方式
+        print("🎯 [CAGrid] scrollWheel method called directly")
+        handleScrollWheel(with: event)
+    }
+
+    private func handleScrollWheel(with event: NSEvent) {
         // 优先使用水平滑动，如果没有则用垂直滑动（反向）
         let deltaX = event.scrollingDeltaX
         let deltaY = event.scrollingDeltaY
@@ -558,10 +780,14 @@ final class CAGridView: NSView, CALayerDelegate {
 
         if !isPrecise {
             // 鼠标滚轮 - 直接翻页
-            if abs(delta) > 2 {
+            print("🖱️ [CAGrid #\(instanceId)] Mouse wheel event, delta=\(delta), currentPage=\(currentPage)")
+            // 降低阈值，让鼠标滚轮更容易触发翻页
+            if abs(delta) > 0.5 {
                 if delta > 0 {
+                    print("🖱️ [CAGrid #\(instanceId)] Mouse wheel -> previous page")
                     navigateToPage(currentPage - 1)
                 } else {
+                    print("🖱️ [CAGrid #\(instanceId)] Mouse wheel -> next page")
                     navigateToPage(currentPage + 1)
                 }
             }
@@ -639,9 +865,14 @@ final class CAGridView: NSView, CALayerDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // 确保成为第一响应者，这样后续的滚轮事件才能被接收
+        window?.makeFirstResponder(self)
+
         let location = convert(event.locationInWindow, from: nil)
+        print("🖱️ [CAGrid] mouseDown at \(location)")
 
         if let (item, index) = itemAt(location) {
+            print("🖱️ [CAGrid] Hit item: \(item.name) at index \(index)")
             if event.clickCount == 1 {
                 // 添加点击效果动画
                 animatePress(at: index, pressed: true)
@@ -658,13 +889,43 @@ final class CAGridView: NSView, CALayerDelegate {
                 longPressTimer = timer
             }
         } else {
-            // 点击空白区域，关闭窗口
-            onEmptyAreaClicked?()
+            // 点击空白区域 - 开始页面拖拽模式
+            print("🖱️ [CAGrid] Hit empty area, starting page drag")
+            isPageDragging = true
+            pageDragStartX = location.x
+            pageDragStartOffset = scrollOffset
+            dragStartPoint = location
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
+
+        // 页面拖拽模式
+        if isPageDragging {
+            let deltaX = location.x - pageDragStartX
+            var newOffset = pageDragStartOffset + deltaX
+
+            // 橡皮筋效果 - 在边界处添加阻力
+            let minOffset = -CGFloat(pageCount - 1) * bounds.width
+            let maxOffset: CGFloat = 0
+
+            if newOffset > maxOffset {
+                let overscroll = newOffset - maxOffset
+                newOffset = maxOffset + rubberBand(overscroll, limit: bounds.width * 0.3)
+            } else if newOffset < minOffset {
+                let overscroll = newOffset - minOffset
+                newOffset = minOffset + rubberBand(overscroll, limit: bounds.width * 0.3)
+            }
+
+            scrollOffset = newOffset
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            pageContainerLayer.transform = CATransform3DMakeTranslation(scrollOffset, 0, 0)
+            CATransaction.commit()
+            return
+        }
 
         // 检查是否移动足够距离来开始拖拽（5像素即可）
         if !isDraggingItem, let idx = pressedIndex {
@@ -691,6 +952,32 @@ final class CAGridView: NSView, CALayerDelegate {
         // 取消长按计时器
         longPressTimer?.invalidate()
         longPressTimer = nil
+
+        // 结束页面拖拽
+        if isPageDragging {
+            isPageDragging = false
+
+            let totalDrag = location.x - pageDragStartX
+            let threshold = bounds.width * 0.15  // 15% 即可触发翻页
+
+            var targetPage = currentPage
+            if totalDrag < -threshold {
+                // 向左拖 -> 下一页
+                targetPage = min(currentPage + 1, pageCount - 1)
+            } else if totalDrag > threshold {
+                // 向右拖 -> 上一页
+                targetPage = max(currentPage - 1, 0)
+            }
+
+            // 如果没有实际拖动（只是点击），则关闭窗口
+            if abs(totalDrag) < 5 {
+                onEmptyAreaClicked?()
+                return
+            }
+
+            navigateToPage(targetPage, animated: true)
+            return
+        }
 
         if isDraggingItem {
             // 结束拖拽
@@ -1150,6 +1437,24 @@ final class CAGridView: NSView, CALayerDelegate {
     func refreshLayout() {
         rebuildLayers()
     }
+
+    /// 确保滚轮事件监听器已安装（供外部调用）
+    func ensureScrollMonitorInstalled() {
+        guard let window = window else {
+            print("⚠️ [CAGrid #\(instanceId)] ensureScrollMonitorInstalled: no window")
+            return
+        }
+
+        // 只要有窗口且没有监听器就安装（可见性在事件处理时检查）
+        if scrollEventMonitor == nil {
+            print("🔄 [CAGrid #\(instanceId)] ensureScrollMonitorInstalled: monitor missing, installing")
+            setupScrollEventMonitor()
+            window.makeFirstResponder(self)
+        }
+    }
+
+    /// 获取实例ID（用于调试）
+    var debugInstanceId: Int { instanceId }
 }
 
 // MARK: - SwiftUI Wrapper
@@ -1189,8 +1494,9 @@ struct CAGridViewRepresentable: NSViewRepresentable {
                 // 丢失的应用，不处理
                 break
             case .empty:
-                // 空白位置，关闭窗口
-                AppDelegate.shared?.hideWindow()
+                // 空白位置，不做任何操作（和真实Launchpad一致）
+                // 只有点击网格外的空白区域才关闭窗口
+                break
             }
         }
 
@@ -1254,6 +1560,10 @@ struct CAGridViewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: CAGridView, context: Context) {
+        print("🔄 [CAGrid #\(nsView.debugInstanceId)] updateNSView, window=\(nsView.window != nil), isVisible=\(nsView.window?.isVisible ?? false)")
+        // 确保滚轮事件监听器已安装（窗口重新显示时需要）
+        nsView.ensureScrollMonitorInstalled()
+
         // 更新配置
         let configChanged = nsView.columns != appStore.gridColumnsPerPage ||
                             nsView.rows != appStore.gridRowsPerPage ||

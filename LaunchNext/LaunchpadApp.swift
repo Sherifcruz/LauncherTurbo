@@ -14,6 +14,47 @@ extension Notification.Name {
 class BorderlessWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // 监控所有可能显示窗口的方法
+    override func orderFront(_ sender: Any?) {
+        print("🪟 [Window] orderFront called")
+        super.orderFront(sender)
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        print("🪟 [Window] makeKeyAndOrderFront called")
+        super.makeKeyAndOrderFront(sender)
+    }
+
+    override func orderFrontRegardless() {
+        print("🪟 [Window] orderFrontRegardless called")
+        super.orderFrontRegardless()
+    }
+
+    override func orderOut(_ sender: Any?) {
+        print("🪟 [Window] orderOut called")
+        super.orderOut(sender)
+    }
+
+    override func deminiaturize(_ sender: Any?) {
+        print("🪟 [Window] deminiaturize called")
+        super.deminiaturize(sender)
+    }
+
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        print("🪟 [Window] order(\(place.rawValue), relativeTo: \(otherWin)) called")
+        super.order(place, relativeTo: otherWin)
+    }
+
+    override func makeKey() {
+        print("🪟 [Window] makeKey called")
+        super.makeKey()
+    }
+
+    override func makeMain() {
+        print("🪟 [Window] makeMain called")
+        super.makeMain()
+    }
 }
 
 @main
@@ -34,6 +75,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
     private var hotKeyEventHandler: EventHandlerRef?
     // private var aiHotKeyRef: EventHotKeyRef?
     private let launchpadHotKeySignature = fourCharCode("LNXK")
+    private var windowVisibilityObservation: NSKeyValueObservation?
     // private let aiOverlayHotKeySignature = fourCharCode("AIOV")
     
     let appStore = AppStore()
@@ -72,6 +114,61 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
         }
 
         if appStore.isFullscreenMode { updateWindowMode(isFullscreen: true) }
+
+        // 注册 Apple Event 处理器来监听 "reopen" 事件（点击 Dock 图标）
+        // 这是 applicationShouldHandleReopen 的底层机制，在 SwiftUI 中更可靠
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleReopenEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEReopenApplication)
+        )
+
+        // 对于 LSUIElement 应用，使用 NSWorkspace 监听应用激活事件
+        // 这可以捕获从 Finder 双击应用或其他方式激活应用的情况
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleWorkspaceAppActivation(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
+    }
+
+    private var isShowingFromDockClick = false
+
+    @objc private func handleWorkspaceAppActivation(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+            return
+        }
+        // 检查是否是我们的应用被激活
+        if app.bundleIdentifier == Bundle.main.bundleIdentifier {
+            print("🍎 [AppDelegate] Our app activated via NSWorkspace, windowIsVisible=\(windowIsVisible)")
+            // 如果窗口不可见，显示它
+            if !windowIsVisible {
+                print("🍎 [AppDelegate] Showing window because app was activated")
+                // 标记为从 Dock 点击显示，防止立即被 autoHideIfNeeded 隐藏
+                isShowingFromDockClick = true
+                showWindow()
+                // 延迟重置标记，给窗口足够时间完成显示和获取焦点
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.isShowingFromDockClick = false
+                }
+            }
+        }
+    }
+
+    @objc private func handleReopenEvent(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        print("🍎 [AppDelegate] handleReopenEvent - Dock icon clicked!")
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if self.windowIsVisible {
+                print("🍎 [AppDelegate] Window is visible, hiding")
+                self.hideWindow()
+            } else {
+                print("🍎 [AppDelegate] Window is hidden, showing")
+                self.showWindow()
+            }
+        }
     }
 
     // MARK: - Global Hotkey
@@ -152,14 +249,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
     }
 
     fileprivate func handleHotKeyEvent(signature: OSType, id: UInt32) {
+        print("🔥 [AppDelegate] handleHotKeyEvent called! signature=\(signature), id=\(id)")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             switch (signature, id) {
             case (self.launchpadHotKeySignature, 1):
+                print("🔥 [AppDelegate] Launchpad hotkey triggered, calling toggleWindow()")
                 self.toggleWindow()
             // case (self.aiOverlayHotKeySignature, 1):
             //     self.appStore.toggleAIOverlayPreview()
             default:
+                print("🔥 [AppDelegate] Unknown hotkey: signature=\(signature), id=\(id)")
                 break
             }
         }
@@ -218,6 +318,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
         }
 
         // 背景点击关闭逻辑改为 SwiftUI 内部实现，避免与输入控件冲突
+
+        // 使用通知监听应用激活（比 delegate 方法更可靠）
+        NotificationCenter.default.addObserver(self, selector: #selector(handleAppDidBecomeActive(_:)), name: NSApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleAppWillBecomeActive(_:)), name: NSApplication.willBecomeActiveNotification, object: nil)
+
+        // KVO 监听窗口可见性变化
+        if let window = window {
+            windowVisibilityObservation = window.observe(\.isVisible, options: [.new, .old]) { [weak self] window, change in
+                let oldValue = change.oldValue ?? false
+                let newValue = change.newValue ?? false
+                print("🔍 [KVO] Window isVisible changed: \(oldValue) -> \(newValue)")
+                if newValue && !oldValue {
+                    // 窗口变为可见 - 确保我们的状态同步
+                    print("🔍 [KVO] Window became visible, our windowIsVisible=\(self?.windowIsVisible ?? false)")
+                }
+            }
+        }
     }
 
     private func bindAppearancePreference() {
@@ -282,18 +399,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
     func presentLaunchError(_ error: Error, for url: URL) { }
     
     func showWindow() {
+        print("📣 [AppDelegate] showWindow() called, windowIsVisible=\(windowIsVisible)")
         pendingShow = true
         pendingHide = false
         startPendingWindowTransition()
     }
-    
+
     func hideWindow() {
+        print("📣 [AppDelegate] hideWindow() called, windowIsVisible=\(windowIsVisible)")
         pendingHide = true
         pendingShow = false
         startPendingWindowTransition()
     }
 
     func toggleWindow() {
+        print("📣 [AppDelegate] toggleWindow() called, windowIsVisible=\(windowIsVisible)")
         if windowIsVisible {
             hideWindow()
         } else {
@@ -399,6 +519,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
         windowIsVisible = true
         updateSystemUIVisibility()
         SoundManager.shared.play(.launchpadOpen)
+
+        // 先发送一个早期通知，让 CAGridView 可以提前准备
+        print("📣 [AppDelegate] Posting launchpadWindowShown notification (early)")
         NotificationCenter.default.post(name: .launchpadWindowShown, object: nil)
 
         animateWindow(to: 1) {
@@ -408,6 +531,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
             DispatchQueue.main.async {
                 self.window?.makeKey()
                 self.window?.makeMain()
+                // 动画完成后再次发送通知，确保滚轮事件监听器正确设置
+                print("📣 [AppDelegate] Posting launchpadWindowShown notification (after animation)")
+                NotificationCenter.default.post(name: .launchpadWindowShown, object: nil)
             }
         }
     }
@@ -454,26 +580,68 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
     }
 
     private func animateWindow(to targetAlpha: CGFloat, resumePending: Bool = true, completion: (() -> Void)? = nil) {
-        guard let window = window else {
+        guard let window = window, let contentView = window.contentView else {
+            completion?()
+            return
+        }
+
+        // 确保 contentView 有 layer
+        contentView.wantsLayer = true
+        guard let layer = contentView.layer else {
             completion?()
             return
         }
 
         isAnimatingWindow = true
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.25
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().alphaValue = targetAlpha
-            window.contentView?.animator().alphaValue = targetAlpha
-        }, completionHandler: {
+
+        let isShowing = targetAlpha > 0.5
+        let duration = isShowing ? LNAnimations.windowShowDuration : LNAnimations.windowHideDuration
+
+        // 设置初始状态
+        if isShowing {
+            // 显示时：从放大状态开始
+            let startScale = LNAnimations.windowShowStartScale
+            layer.setAffineTransform(CGAffineTransform(scaleX: startScale, y: startScale))
+        }
+
+        // 计算目标缩放
+        let targetScale: CGFloat = isShowing ? 1.0 : LNAnimations.windowHideEndScale
+
+        // 使用 CATransaction 进行更精确的动画控制
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(duration)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: isShowing ? .easeOut : .easeIn))
+        CATransaction.setCompletionBlock {
+            // 重置 transform
+            layer.setAffineTransform(.identity)
             window.alphaValue = targetAlpha
-            window.contentView?.alphaValue = targetAlpha
+            contentView.alphaValue = targetAlpha
             self.isAnimatingWindow = false
             completion?()
             if resumePending {
                 self.startPendingWindowTransition()
             }
+        }
+
+        // 添加缩放动画
+        let scaleAnimation = CABasicAnimation(keyPath: "transform.scale")
+        scaleAnimation.fromValue = isShowing ? LNAnimations.windowShowStartScale : 1.0
+        scaleAnimation.toValue = targetScale
+        scaleAnimation.duration = duration
+        scaleAnimation.timingFunction = CAMediaTimingFunction(name: isShowing ? .easeOut : .easeIn)
+        scaleAnimation.fillMode = .forwards
+        scaleAnimation.isRemovedOnCompletion = false
+        layer.add(scaleAnimation, forKey: "windowScaleAnimation")
+
+        // 同时执行透明度动画
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = duration
+            ctx.timingFunction = CAMediaTimingFunction(name: isShowing ? .easeOut : .easeIn)
+            window.animator().alphaValue = targetAlpha
+            contentView.animator().alphaValue = targetAlpha
         })
+
+        CATransaction.commit()
     }
     
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
@@ -486,17 +654,66 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSGestureR
     func windowDidResignKey(_ notification: Notification) { autoHideIfNeeded() }
     func windowDidResignMain(_ notification: Notification) { autoHideIfNeeded() }
     private func autoHideIfNeeded() {
+        // 如果正在从 Dock 点击显示窗口，不要自动隐藏
+        guard !isShowingFromDockClick else {
+            print("🍎 [AppDelegate] autoHideIfNeeded: skipping because isShowingFromDockClick=true")
+            return
+        }
         guard !appStore.isSetting else { return }
         hideWindow()
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        print("📣 [AppDelegate] applicationShouldHandleReopen, hasVisibleWindows=\(flag), window.isVisible=\(window?.isVisible ?? false)")
         if window?.isVisible == true {
             hideWindow()
         } else {
             showWindow()
         }
         return false
+    }
+
+    // SwiftUI + NSApplicationDelegateAdaptor bug workaround:
+    // applicationShouldHandleReopen is not called in SwiftUI apps
+    // Use applicationWillBecomeActive as a workaround
+    // See: https://developer.apple.com/forums/thread/706772
+    func applicationWillBecomeActive(_ notification: Notification) {
+        print("📣 [AppDelegate] applicationWillBecomeActive, windowIsVisible=\(windowIsVisible), window.isVisible=\(window?.isVisible ?? false)")
+        // 如果窗口不可见，点击 dock 图标时显示窗口
+        if !windowIsVisible {
+            showWindow()
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        print("📣 [AppDelegate] applicationDidBecomeActive (delegate), windowIsVisible=\(windowIsVisible), window.isVisible=\(window?.isVisible ?? false)")
+        // 确保窗口在 app 激活后正确显示
+        if window?.isVisible == true && !windowIsVisible {
+            // 窗口可见但我们的状态显示不可见，同步状态
+            windowIsVisible = true
+        }
+    }
+
+    // 使用通知监听（比 delegate 方法更可靠）
+    @objc private func handleAppWillBecomeActive(_ notification: Notification) {
+        print("📣 [AppDelegate] handleAppWillBecomeActive (notification), windowIsVisible=\(windowIsVisible), window.isVisible=\(window?.isVisible ?? false)")
+        // 如果窗口不可见，点击 dock 图标时显示窗口
+        if !windowIsVisible {
+            print("📣 [AppDelegate] Window not visible, calling showWindow()")
+            showWindow()
+        }
+    }
+
+    @objc private func handleAppDidBecomeActive(_ notification: Notification) {
+        print("📣 [AppDelegate] handleAppDidBecomeActive (notification), windowIsVisible=\(windowIsVisible), window.isVisible=\(window?.isVisible ?? false)")
+        // 确保窗口在 app 激活后正确显示
+        if window?.isVisible == true && !windowIsVisible {
+            // 窗口可见但我们的状态显示不可见，同步状态
+            print("📣 [AppDelegate] Syncing windowIsVisible to true")
+            windowIsVisible = true
+        }
+        // 确保滚轮事件监听器正确安装
+        NotificationCenter.default.post(name: .launchpadWindowShown, object: nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
